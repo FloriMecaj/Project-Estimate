@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
-import { ArrowRight, CalendarDays, Check, Copy, MessageCircle, Pencil, Printer, RotateCcw } from "lucide-react"
+import { ArrowRight, CalendarDays, Check, Copy, Download, Loader2, MessageCircle, Pencil, Printer, RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -58,7 +58,6 @@ export function Estimate() {
   const [prices, setPrices] = useState<Record<string, string>>(initialPrices)
   const [total, setTotal] = useState<string | null>(null)
   const [reviewOpen, setReviewOpen] = useState(false)
-  const [link, setLink] = useState<string | null>(null)
   const [shared, setShared] = useState<Snapshot | null>(null)
   const [loaded, setLoaded] = useState(false)
 
@@ -125,8 +124,8 @@ export function Estimate() {
   }
 
   const finish = () => {
-    setLink(shareUrl({ selected, prices, total: totals.overridden ? total : null, finishedAt: new Date().toISOString() }))
-    setReviewOpen(false)
+    // Go to the finished page; its URL carries the whole selection.
+    window.location.assign(shareUrl({ selected, prices, total: totals.overridden ? total : null, finishedAt: new Date().toISOString() }))
   }
 
   const scrollToFinal = () => document.getElementById("final")?.scrollIntoView({ behavior: "smooth" })
@@ -294,54 +293,7 @@ export function Estimate() {
         </DialogContent>
       </Dialog>
 
-      <FinishedDialog link={link} totals={totals} onClose={() => setLink(null)} />
     </Shell>
-  )
-}
-
-function FinishedDialog({ link, totals, onClose }: { link: string | null; totals: Totals; onClose: () => void }) {
-  const [copied, setCopied] = useState(false)
-  const copy = async () => {
-    if (!link) return
-    try {
-      await navigator.clipboard.writeText(link)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      toast.error("Couldn't copy. Select the link and copy it manually.")
-    }
-  }
-  const message = link
-    ? `I finished my nimbkids.al selection: ${eur(totals.final)}${totals.monthly ? ` + ${eur(totals.monthly)}/month` : ""}.\n${link}`
-    : ""
-
-  return (
-    <Dialog open={!!link} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <div className="mb-2 grid size-12 place-items-center rounded-full bg-teal text-white">
-            <Check className="size-6" />
-          </div>
-          <DialogTitle className="font-serif text-xl">All done!</DialogTitle>
-          <DialogDescription>
-            Send this link to let us know you&apos;ve finished. It opens your exact selection ({totals.count} items, {eur(totals.final)}).
-          </DialogDescription>
-        </DialogHeader>
-        <Input readOnly value={link ?? ""} onFocus={(e) => e.target.select()} className="font-mono text-xs" />
-        <DialogFooter className="gap-2 sm:justify-stretch">
-          <Button variant="outline" onClick={copy} className="flex-1">
-            {copied ? <Check /> : <Copy />} {copied ? "Copied" : "Copy link"}
-          </Button>
-          <Button
-            nativeButton={false}
-            className="flex-1 bg-[#25D366] text-white hover:bg-[#25D366]/90"
-            render={<a href={`https://wa.me/?text=${encodeURIComponent(message)}`} target="_blank" rel="noopener noreferrer" />}
-          >
-            <MessageCircle /> Send on WhatsApp
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 
@@ -353,7 +305,8 @@ function SharedView({ snap }: { snap: Snapshot }) {
 
   return (
     <Shell>
-      <section className="mx-auto max-w-3xl px-4 pt-10 pb-16 sm:pt-14">
+      <FinishedToolbar snap={snap} totals={totals} when={when} />
+      <section className="mx-auto max-w-3xl px-4 pt-8 pb-16 sm:pt-10">
         <Badge className="bg-teal text-white">Finished selection</Badge>
         <h1 className="mt-3 font-serif text-3xl font-semibold sm:text-4xl">{proposal.project}</h1>
         {when && <p className="mt-1 text-sm text-muted-foreground">Finished on {when}</p>}
@@ -405,16 +358,73 @@ function SharedView({ snap }: { snap: Snapshot }) {
           })}
         </div>
 
-        <div className="mt-10 flex flex-col gap-3 sm:flex-row sm:justify-end print:hidden">
-          <Button variant="outline" onClick={() => window.print()}>
-            <Printer /> Print / save PDF
-          </Button>
+        <div className="mt-10 flex justify-center sm:justify-end print:hidden">
           <Button nativeButton={false} render={<a href={window.location.pathname} />} className="bg-teal text-white hover:bg-teal/90">
             Start a new estimate <ArrowRight />
           </Button>
         </div>
       </section>
     </Shell>
+  )
+}
+
+function FinishedToolbar({ snap, totals, when }: { snap: Snapshot; totals: Totals; when: string }) {
+  const [copied, setCopied] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const link = typeof window === "undefined" ? "" : window.location.href
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error("Couldn't copy. Copy the address from the browser bar instead.")
+    }
+  }
+  const download = async () => {
+    setBusy(true)
+    try {
+      const { downloadPdf } = await import("@/lib/pdf")
+      await downloadPdf(snap, totals, when)
+    } catch {
+      toast.error("Couldn't create the PDF. Try Print → Save as PDF instead.")
+    } finally {
+      setBusy(false)
+    }
+  }
+  const message = `I finished my nimbkids.al selection: ${eur(totals.final)}${totals.monthly ? ` + ${eur(totals.monthly)}/month` : ""}.\n${link}`
+
+  return (
+    <div className="sticky top-0 z-20 border-b bg-card/95 backdrop-blur print:hidden">
+      <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2 px-4 py-3">
+        <p className="mr-auto flex items-center gap-2 text-sm font-medium">
+          <span className="grid size-6 place-items-center rounded-full bg-teal text-white">
+            <Check className="size-3.5" />
+          </span>
+          Finished
+        </p>
+        <Button variant="outline" onClick={copy}>
+          {copied ? <Check /> : <Copy />} {copied ? "Copied" : "Copy link"}
+        </Button>
+        <Button variant="outline" onClick={() => window.print()}>
+          <Printer /> Print
+        </Button>
+        <Button onClick={download} disabled={busy} className="bg-teal text-white hover:bg-teal/90">
+          {busy ? <Loader2 className="animate-spin" /> : <Download />} Download PDF
+        </Button>
+        <Button
+          nativeButton={false}
+          variant="outline"
+          size="icon"
+          aria-label="Send link on WhatsApp"
+          title="Send link on WhatsApp"
+          render={<a href={`https://wa.me/?text=${encodeURIComponent(message)}`} target="_blank" rel="noopener noreferrer" />}
+        >
+          <MessageCircle />
+        </Button>
+      </div>
+    </div>
   )
 }
 
